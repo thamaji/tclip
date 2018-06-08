@@ -17,7 +17,7 @@ import (
 func usage() {
 	output := flag.CommandLine.Output()
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Usage: "+os.Args[0]+" FILE [FILE...]")
+	fmt.Fprintln(output, "Usage: "+os.Args[0]+" [OPTIONS] FILE [FILE...]")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Table data to clipboard")
 	fmt.Fprintln(output)
@@ -27,6 +27,7 @@ func usage() {
 
 func convertToHTML(w io.Writer, input, format string) error {
 	var file io.ReadCloser
+	var r *csv.Reader
 	var err error
 
 	if input == "-" {
@@ -40,75 +41,95 @@ func convertToHTML(w io.Writer, input, format string) error {
 	}
 	defer file.Close()
 
-	r := csv.NewReader(file)
+	r = csv.NewReader(file)
+	var comma rune
 
 	switch strings.ToLower(format) {
 	case "tsv":
-		r.Comma = '\t'
+		comma = '\t'
 
 	case "csv":
-		r.Comma = ','
+		comma = ','
 
 	case "auto":
-		if input != "" {
+		if input != "-" {
 			switch strings.ToLower(filepath.Ext(input)) {
 			case ".tsv":
-				r.Comma = '\t'
+				comma = '\t'
 
 			case ".csv":
-				r.Comma = ','
-
-			default:
-				rbuf := bytes.NewBuffer(make([]byte, 0, 1024))
-				if _, err := io.Copy(rbuf, file); err != nil {
-					return err
-				}
-				buf := rbuf.Bytes()
-
-				r1 := csv.NewReader(bytes.NewReader(buf))
-				r1.Comma = '\t'
-				if _, err := r.ReadAll(); err == nil {
-					r = csv.NewReader(bytes.NewReader(buf))
-					r.Comma = r1.Comma
-					break
-				}
-
-				r1 = csv.NewReader(bytes.NewReader(buf))
-				r1.Comma = ','
-				if _, err := r.ReadAll(); err == nil {
-					r = csv.NewReader(bytes.NewReader(buf))
-					r.Comma = r1.Comma
-					break
-				}
-
-				return errors.New("unknown format")
+				comma = ','
 			}
 		}
+
+		if comma != 0 {
+			break
+		}
+
+		buf := bytes.NewBuffer(make([]byte, 0, 1024))
+		if _, err := io.Copy(buf, file); err != nil {
+			return err
+		}
+
+		var max int
+		for _, c := range []rune{'\t', ','} {
+			var record []string
+			var err error
+			r := csv.NewReader(bytes.NewReader(buf.Bytes()))
+			r.Comma = c
+			r.LazyQuotes = true
+			r.FieldsPerRecord = -1
+			fields := 0
+			for {
+				record, err = r.Read()
+				if record != nil {
+					fields += len(record)
+				}
+				if err != nil {
+					break
+				}
+			}
+
+			if err != io.EOF {
+				continue
+			}
+
+			if max < fields {
+				max = fields
+				comma = c
+			}
+		}
+
+		r = csv.NewReader(bytes.NewReader(buf.Bytes()))
 
 	default:
 		return errors.New("unsupported format: " + format)
 	}
 
-	r.Comma = '\t'
-	r.LazyQuotes = true
+	if comma == 0 {
+		return errors.New("unknown format")
+	}
 
-	fmt.Fprint(w, "<table>")
+	r.Comma = comma
+	r.LazyQuotes = true
+	r.FieldsPerRecord = -1
+
 	for {
 		record, err := r.Read()
+		if record != nil {
+			fmt.Fprint(w, "<tr>")
+			for _, field := range record {
+				fmt.Fprint(w, "<td>"+html.EscapeString(field)+"</td>")
+			}
+			fmt.Fprint(w, "</tr>")
+		}
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return err
 		}
-
-		fmt.Fprint(w, "<tr>")
-		for _, field := range record {
-			fmt.Fprint(w, "<td>"+html.EscapeString(field)+"</td>")
-		}
-		fmt.Fprint(w, "</tr>")
 	}
-	fmt.Fprint(w, "</table>")
 
 	return nil
 }
@@ -118,9 +139,11 @@ func main() {
 	output := flag.CommandLine.Output()
 
 	var format string
+	var join bool
 	var version, help bool
 
 	flag.StringVar(&format, "f", "auto", "set input table format; formats are tsv,csv,auto")
+	flag.BoolVar(&join, "j", false, "join multi tables")
 	flag.BoolVar(&version, "v", false, "show version")
 	flag.BoolVar(&help, "h", false, "show help")
 	flag.Parse()
@@ -131,7 +154,7 @@ func main() {
 	}
 
 	if version {
-		fmt.Fprintln(output, "1.0.1")
+		fmt.Fprintln(output, "1.0.3")
 		return
 	}
 
@@ -152,10 +175,24 @@ func main() {
 		return
 	}
 
-	for _, arg := range args {
-		if err := convertToHTML(w, arg, format); err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			return
+	if join {
+		fmt.Fprint(w, "<table>")
+		for _, arg := range args {
+			if err := convertToHTML(w, arg, format); err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				return
+			}
+		}
+		fmt.Fprint(w, "</table>")
+
+	} else {
+		for _, arg := range args {
+			fmt.Fprint(w, "<table>")
+			if err := convertToHTML(w, arg, format); err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				return
+			}
+			fmt.Fprint(w, "</table>")
 		}
 	}
 
