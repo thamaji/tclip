@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
 	"html"
@@ -16,7 +17,7 @@ import (
 func usage() {
 	output := flag.CommandLine.Output()
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Usage: "+os.Args[0]+"")
+	fmt.Fprintln(output, "Usage: "+os.Args[0]+" FILE [FILE...]")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Table data to clipboard")
 	fmt.Fprintln(output)
@@ -24,42 +25,9 @@ func usage() {
 	flag.CommandLine.PrintDefaults()
 }
 
-func main() {
-	flag.Usage = usage
-	output := flag.CommandLine.Output()
-
-	var input, format string
-	var version, help bool
-
-	flag.StringVar(&input, "i", "-", "set input file")
-	flag.StringVar(&format, "f", "auto", "set input table format; formats are tsv,csv,auto")
-	flag.BoolVar(&version, "v", false, "show version")
-	flag.BoolVar(&help, "h", false, "show help")
-	flag.Parse()
-
-	if help {
-		usage()
-		return
-	}
-
-	if version {
-		fmt.Fprintln(output, "1.0.0")
-		return
-	}
-
-	cmd := exec.Command("xclip", "-t", "text/html", "-selection", "clipboard", "-i")
-	w, err := cmd.StdinPipe()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		return
-	}
-
+func convertToHTML(w io.Writer, input, format string) error {
 	var file io.ReadCloser
+	var err error
 
 	if input == "-" {
 		file = os.Stdin
@@ -67,8 +35,7 @@ func main() {
 	} else {
 		file, err = os.Open(input)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			return
+			return err
 		}
 	}
 	defer file.Close()
@@ -94,8 +61,7 @@ func main() {
 			default:
 				rbuf := bytes.NewBuffer(make([]byte, 0, 1024))
 				if _, err := io.Copy(rbuf, file); err != nil {
-					fmt.Fprintln(os.Stderr, err.Error())
-					return
+					return err
 				}
 				buf := rbuf.Bytes()
 
@@ -115,16 +81,12 @@ func main() {
 					break
 				}
 
-				fmt.Fprintln(os.Stderr, "unknown format")
-				usage()
-				return
+				return errors.New("unknown format")
 			}
 		}
 
 	default:
-		fmt.Fprintln(os.Stderr, "unsupported format: "+format)
-		usage()
-		return
+		return errors.New("unsupported format: " + format)
 	}
 
 	r.Comma = '\t'
@@ -137,8 +99,7 @@ func main() {
 			break
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			return
+			return err
 		}
 
 		fmt.Fprint(w, "<tr>")
@@ -149,7 +110,58 @@ func main() {
 	}
 	fmt.Fprint(w, "</table>")
 
+	return nil
+}
+
+func main() {
+	flag.Usage = usage
+	output := flag.CommandLine.Output()
+
+	var format string
+	var version, help bool
+
+	flag.StringVar(&format, "f", "auto", "set input table format; formats are tsv,csv,auto")
+	flag.BoolVar(&version, "v", false, "show version")
+	flag.BoolVar(&help, "h", false, "show help")
+	flag.Parse()
+
+	if help {
+		usage()
+		return
+	}
+
+	if version {
+		fmt.Fprintln(output, "1.0.1")
+		return
+	}
+
+	args := flag.Args()
+	if len(args) <= 0 {
+		args = append(args, "-")
+	}
+
+	cmd := exec.Command("xclip", "-t", "text/html", "-selection", "clipboard", "-i")
+	w, err := cmd.StdinPipe()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return
+	}
+
+	for _, arg := range args {
+		if err := convertToHTML(w, arg, format); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			return
+		}
+	}
+
 	w.Close()
 
-	cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+	}
 }
