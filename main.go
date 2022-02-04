@@ -155,7 +155,7 @@ func main() {
 	}
 
 	if version {
-		fmt.Fprintln(output, "1.0.3")
+		fmt.Fprintln(output, "1.0.4")
 		return
 	}
 
