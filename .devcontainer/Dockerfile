@@ -44,4 +44,11 @@ ENV GOROOT=/usr/local/go \
     GOPATH=/home/vscode/go \
     PATH=/home/vscode/go/bin:/usr/local/go/bin:${PATH}
 
+# xclip
+RUN set -x \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        xclip \
+    && apt-get clean && rm -rf /var/cache/apt/archives/* /var/lib/apt/lists/*
+
 USER vscode
