@@ -25,6 +25,10 @@ func usage() {
 	flag.CommandLine.PrintDefaults()
 }
 
+func NewEmptyLineQuoteInsertReader(s string) *strings.Reader {
+	return strings.NewReader(strings.ReplaceAll(s, "\n\n", "\n\"\"\n"))
+}
+
 func convertToHTML(w io.Writer, input, format string) error {
 	var file io.ReadCloser
 	var r *csv.Reader
@@ -41,9 +45,12 @@ func convertToHTML(w io.Writer, input, format string) error {
 	}
 	defer file.Close()
 
-	r = csv.NewReader(file)
-	var comma rune
+	buf := bytes.NewBuffer(make([]byte, 0, 1024))
+	if _, err := io.Copy(buf, file); err != nil {
+		return err
+	}
 
+	var comma rune
 	switch strings.ToLower(format) {
 	case "tsv":
 		comma = '\t'
@@ -64,11 +71,6 @@ func convertToHTML(w io.Writer, input, format string) error {
 
 		if comma != 0 {
 			break
-		}
-
-		buf := bytes.NewBuffer(make([]byte, 0, 1024))
-		if _, err := io.Copy(buf, file); err != nil {
-			return err
 		}
 
 		var max int
@@ -100,8 +102,6 @@ func convertToHTML(w io.Writer, input, format string) error {
 			}
 		}
 
-		r = csv.NewReader(bytes.NewReader(buf.Bytes()))
-
 	default:
 		return errors.New("unsupported format: " + format)
 	}
@@ -110,6 +110,7 @@ func convertToHTML(w io.Writer, input, format string) error {
 		return errors.New("unknown format")
 	}
 
+	r = csv.NewReader(NewEmptyLineQuoteInsertReader(buf.String()))
 	r.Comma = comma
 	r.LazyQuotes = true
 	r.FieldsPerRecord = -1
